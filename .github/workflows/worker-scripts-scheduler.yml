@@ -8,7 +8,7 @@ on:
         required: false
         default: "20"
   schedule:
-    - cron: "*/2 * * * *"
+    - cron: "*/5 * * * *"
 
 concurrency:
   group: worker-scripts-once
