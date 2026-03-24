@@ -56,6 +56,9 @@ jobs:
 
       - name: Apply migrations
         run: npm run prisma:migrate:deploy
+        
+      - name: Seed demo data (acceptance only)
+        run: npm run prisma:seed
 
       - name: Validate worker runtime config
         run: npm run worker:scripts:check-config
