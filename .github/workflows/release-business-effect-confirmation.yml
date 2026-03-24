@@ -44,7 +44,7 @@ jobs:
       - name: Validate required runtime secrets
         run: |
           if [ -z "${DATABASE_URL}" ]; then
-            echo "DATABASE_URL secret is required for release business effect confirmation." >&2
+            echo "DATABASE_URL secret is required." >&2
             exit 1
           fi
 
@@ -65,15 +65,92 @@ jobs:
       - name: Validate worker runtime config
         run: npm run worker:scripts:check-config
 
-      - name: Confirm business effect
+      - name: Queue business-effect task
+        id: queue
+        env:
+          BATCH_ID: ${{ github.event.inputs.batch_id }}
+          DESIRED_COUNT: ${{ github.event.inputs.desired_count }}
         run: |
-          ARGS=(
-            --batch-id "${{ github.event.inputs.batch_id }}"
-            --limit "${{ github.event.inputs.limit }}"
-          )
+          node --input-type=module <<'NODE'
+          import fs from "node:fs";
+          import { app } from "./src/app.js";
+          import { prisma } from "./src/lib/prisma.js";
 
-          if [ -n "${{ github.event.inputs.desired_count }}" ]; then
-            ARGS+=(--desired-count "${{ github.event.inputs.desired_count }}")
-          fi
+          const batchId = process.env.BATCH_ID;
+          const desiredInput = (process.env.DESIRED_COUNT ?? "").trim();
 
-          npm run release:business-effect-check -- "${ARGS[@]}"
+          if (!batchId) throw new Error("batch_id is required.");
+
+          const batch = await prisma.batch.findUnique({
+            where: { id: batchId },
+            select: {
+              scriptGeneratedCount: true,
+              productProfile: { select: { id: true } },
+              batchReferenceVideos: {
+                where: { isSelected: true },
+                select: { id: true },
+                take: 1
+              }
+            }
+          });
+
+          if (!batch) throw new Error(`Batch not found: ${batchId}`);
+          if (!batch.productProfile) throw new Error(`Batch ${batchId} has no productProfile.`);
+          if (batch.batchReferenceVideos.length === 0) throw new Error(`Batch ${batchId} has no selected reference video.`);
+
+          const beforeScriptGeneratedCount = batch.scriptGeneratedCount;
+          let desiredCount = beforeScriptGeneratedCount + 1;
+
+          if (desiredInput !== "") {
+            const parsed = Number.parseInt(desiredInput, 10);
+            if (Number.isNaN(parsed) || parsed < 1 || parsed > 50) {
+              throw new Error("desired_count must be an integer between 1 and 50.");
+            }
+            desiredCount = parsed;
+          }
+
+          if (desiredCount <= beforeScriptGeneratedCount) {
+            throw new Error(`desired_count (${desiredCount}) must be greater than current scriptGeneratedCount (${beforeScriptGeneratedCount}).`);
+          }
+
+          const beforeScriptVariantCount = await prisma.scriptVariant.count({
+            where: { batchId }
+          });
+
+          const triggerSource = `gh_release_business_effect_${Date.now()}`;
+          const response = await app.request(`http://localhost/api/batches/${batchId}/script-generation-tasks`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              desiredCount,
+              priority: 999,
+              maxRetries: 3,
+              triggerSource,
+              requestPayload: {
+                operator: "release_business_effect_check",
+                checkId: triggerSource
+              }
+            })
+          });
+
+          const json = await response.json().catch(() => null);
+          if (response.status !== 202) {
+            throw new Error(`Failed to create task: ${json?.error?.message ?? `HTTP ${response.status}`}`);
+          }
+
+          const taskId = json?.data?.task?.id;
+          if (!taskId) throw new Error("Task id missing from response.");
+
+          console.log(JSON.stringify({
+            event: "business_effect_task_queued",
+            batchId,
+            taskId,
+            desiredCount,
+            beforeScriptGeneratedCount,
+            beforeScriptVariantCount
+          }));
+
+          const outputFile = process.env.GITHUB_OUTPUT;
+          if (outputFile) {
+            fs.appendFileSync(outputFile, `task_id=${taskId}\n`);
+            fs.append
