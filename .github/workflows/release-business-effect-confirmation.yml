@@ -1,9 +1,185 @@
 name: Release Business Effect Confirmation
+
 on:
   workflow_dispatch:
+    inputs:
+      batch_id:
+        description: Batch id to verify business effect
+        required: true
+        default: "00000000-0000-0000-0000-000000000001"
+      limit:
+        description: Max queued tasks to consume in this run
+        required: false
+        default: "5"
 
 jobs:
-  ping:
+  confirm-business-effect:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      SCRIPT_GENERATION_API_KEY: ${{ secrets.SCRIPT_GENERATION_API_KEY }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      SCRIPT_GENERATION_PROVIDER: ${{ vars.SCRIPT_GENERATION_PROVIDER }}
+      SCRIPT_GENERATION_MODEL: ${{ vars.SCRIPT_GENERATION_MODEL }}
+      SCRIPT_GENERATION_BASE_URL: ${{ vars.SCRIPT_GENERATION_BASE_URL }}
+      SCRIPT_GENERATION_TIMEOUT_MS: ${{ vars.SCRIPT_GENERATION_TIMEOUT_MS }}
+      SCRIPT_GENERATION_LANGUAGE: ${{ vars.SCRIPT_GENERATION_LANGUAGE }}
+
     steps:
-      - run: echo "workflow_dispatch is working"
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Validate required runtime secrets
+        run: |
+          if [ -z "${DATABASE_URL}" ]; then
+            echo "DATABASE_URL secret is required." >&2
+            exit 1
+          fi
+          if [ -z "${SCRIPT_GENERATION_API_KEY}" ] && [ -z "${OPENAI_API_KEY}" ] && [ -z "${GEMINI_API_KEY}" ]; then
+            echo "SCRIPT_GENERATION_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY secret is required." >&2
+            exit 1
+          fi
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma client
+        run: npm run prisma:generate
+
+      - name: Apply migrations
+        run: npm run prisma:migrate:deploy
+
+      - name: Validate worker runtime config
+        run: npm run worker:scripts:check-config
+
+      - name: Start API
+        run: |
+          npm run start > /tmp/vvs_api.log 2>&1 &
+          echo $! > /tmp/vvs_api.pid
+          sleep 2
+          curl -sf http://127.0.0.1:3000/health | jq .
+
+      - name: Read batch before run
+        id: before
+        env:
+          BATCH_ID: ${{ github.event.inputs.batch_id }}
+        run: |
+          STATUS=$(curl -s -o /tmp/batch_before.json -w "%{http_code}" "http://127.0.0.1:3000/api/batches/${BATCH_ID}")
+          if [ "${STATUS}" != "200" ]; then
+            echo "batch_id=${BATCH_ID} not found, HTTP=${STATUS}" >&2
+            echo "Available batches:"
+            curl -s "http://127.0.0.1:3000/api/batches?page=1&pageSize=20" | jq .
+            exit 1
+          fi
+
+          BEFORE_GENERATED=$(jq -r '.data.scriptGeneratedCount' /tmp/batch_before.json)
+          BEFORE_VARIANTS=$(jq -r '.data.scripts | length' /tmp/batch_before.json)
+          DESIRED_COUNT=$((BEFORE_GENERATED + 1))
+
+          echo "before_generated=${BEFORE_GENERATED}" >> "$GITHUB_OUTPUT"
+          echo "before_variants=${BEFORE_VARIANTS}" >> "$GITHUB_OUTPUT"
+          echo "desired_count=${DESIRED_COUNT}" >> "$GITHUB_OUTPUT"
+
+      - name: Queue task
+        id: queue
+        env:
+          BATCH_ID: ${{ github.event.inputs.batch_id }}
+          DESIRED_COUNT: ${{ steps.before.outputs.desired_count }}
+        run: |
+          TRIGGER="gh_business_effect_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}"
+          PAYLOAD=$(jq -n \
+            --argjson desiredCount "${DESIRED_COUNT}" \
+            --arg trigger "${TRIGGER}" \
+            '{
+              desiredCount: $desiredCount,
+              priority: 999,
+              maxRetries: 3,
+              triggerSource: $trigger,
+              requestPayload: { operator: "business_effect_confirmation", checkId: $trigger }
+            }')
+
+          STATUS=$(curl -s -o /tmp/queue.json -w "%{http_code}" \
+            -X POST "http://127.0.0.1:3000/api/batches/${BATCH_ID}/script-generation-tasks" \
+            -H "Content-Type: application/json" \
+            -d "${PAYLOAD}")
+
+          cat /tmp/queue.json | jq .
+
+          if [ "${STATUS}" != "202" ]; then
+            echo "Queue task failed, HTTP=${STATUS}" >&2
+            exit 1
+          fi
+
+          TASK_ID=$(jq -r '.data.task.id // empty' /tmp/queue.json)
+          if [ -z "${TASK_ID}" ]; then
+            echo "Task id missing." >&2
+            exit 1
+          fi
+
+          echo "task_id=${TASK_ID}" >> "$GITHUB_OUTPUT"
+
+      - name: Run worker once
+        run: npm run worker:scripts:once -- --limit="${{ github.event.inputs.limit }}"
+
+      - name: Verify business effect
+        env:
+          BATCH_ID: ${{ github.event.inputs.batch_id }}
+          TASK_ID: ${{ steps.queue.outputs.task_id }}
+          BEFORE_GENERATED: ${{ steps.before.outputs.before_generated }}
+          BEFORE_VARIANTS: ${{ steps.before.outputs.before_variants }}
+        run: |
+          curl -sf "http://127.0.0.1:3000/api/batches/${BATCH_ID}" > /tmp/batch_after.json
+
+          AFTER_GENERATED=$(jq -r '.data.scriptGeneratedCount' /tmp/batch_after.json)
+          AFTER_VARIANTS=$(jq -r '.data.scripts | length' /tmp/batch_after.json)
+          TASK_STATUS=$(jq -r --arg id "${TASK_ID}" '.data.tasks[] | select(.id == $id) | .status' /tmp/batch_after.json)
+
+          if [ "${TASK_STATUS}" != "SUCCEEDED" ]; then
+            echo "Task status is ${TASK_STATUS}, expected SUCCEEDED." >&2
+            exit 1
+          fi
+
+          if [ "${AFTER_GENERATED}" -le "${BEFORE_GENERATED}" ]; then
+            echo "scriptGeneratedCount not increased: before=${BEFORE_GENERATED}, after=${AFTER_GENERATED}" >&2
+            exit 1
+          fi
+
+          if [ "${AFTER_VARIANTS}" -le "${BEFORE_VARIANTS}" ]; then
+            echo "script variants not increased: before=${BEFORE_VARIANTS}, after=${AFTER_VARIANTS}" >&2
+            exit 1
+          fi
+
+          jq -n \
+            --arg event "business_effect_check_passed" \
+            --arg batchId "${BATCH_ID}" \
+            --arg taskId "${TASK_ID}" \
+            --arg taskStatus "${TASK_STATUS}" \
+            --argjson beforeGenerated "${BEFORE_GENERATED}" \
+            --argjson afterGenerated "${AFTER_GENERATED}" \
+            --argjson beforeVariants "${BEFORE_VARIANTS}" \
+            --argjson afterVariants "${AFTER_VARIANTS}" \
+            '{
+              event: $event,
+              batchId: $batchId,
+              taskId: $taskId,
+              taskStatus: $taskStatus,
+              beforeScriptGeneratedCount: $beforeGenerated,
+              afterScriptGeneratedCount: $afterGenerated,
+              beforeScriptVariantCount: $beforeVariants,
+              afterScriptVariantCount: $afterVariants
+            }'
+
+      - name: Stop API
+        if: always()
+        run: |
+          if [ -f /tmp/vvs_api.pid ]; then
+            kill "$(cat /tmp/vvs_api.pid)" >/dev/null 2>&1 || true
+          fi
