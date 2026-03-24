@@ -65,92 +65,137 @@ jobs:
       - name: Validate worker runtime config
         run: npm run worker:scripts:check-config
 
+      - name: Start API for acceptance checks
+        run: |
+          npm run start > /tmp/vvs_api.log 2>&1 &
+          echo $! > /tmp/vvs_api.pid
+          sleep 2
+          curl -sf http://127.0.0.1:3000/health > /tmp/vvs_health.json
+          cat /tmp/vvs_health.json
+
       - name: Queue business-effect task
         id: queue
         env:
           BATCH_ID: ${{ github.event.inputs.batch_id }}
-          DESIRED_COUNT: ${{ github.event.inputs.desired_count }}
+          DESIRED_COUNT_INPUT: ${{ github.event.inputs.desired_count }}
         run: |
-          node --input-type=module <<'NODE'
-          import fs from "node:fs";
-          import { app } from "./src/app.js";
-          import { prisma } from "./src/lib/prisma.js";
+          BEFORE_JSON=$(curl -sf "http://127.0.0.1:3000/api/batches/${BATCH_ID}")
+          BEFORE_GENERATED=$(echo "$BEFORE_JSON" | jq -r '.data.scriptGeneratedCount')
+          BEFORE_VARIANTS=$(echo "$BEFORE_JSON" | jq -r '.data.scripts | length')
 
-          const batchId = process.env.BATCH_ID;
-          const desiredInput = (process.env.DESIRED_COUNT ?? "").trim();
+          if [ "${DESIRED_COUNT_INPUT}" = "" ]; then
+            DESIRED_COUNT=$((BEFORE_GENERATED + 1))
+          else
+            DESIRED_COUNT="${DESIRED_COUNT_INPUT}"
+          fi
 
-          if (!batchId) throw new Error("batch_id is required.");
+          if ! [[ "${DESIRED_COUNT}" =~ ^[0-9]+$ ]]; then
+            echo "desired_count must be integer." >&2
+            exit 1
+          fi
 
-          const batch = await prisma.batch.findUnique({
-            where: { id: batchId },
-            select: {
-              scriptGeneratedCount: true,
-              productProfile: { select: { id: true } },
-              batchReferenceVideos: {
-                where: { isSelected: true },
-                select: { id: true },
-                take: 1
-              }
-            }
-          });
+          if [ "${DESIRED_COUNT}" -lt 1 ] || [ "${DESIRED_COUNT}" -gt 50 ]; then
+            echo "desired_count must be in [1, 50]." >&2
+            exit 1
+          fi
 
-          if (!batch) throw new Error(`Batch not found: ${batchId}`);
-          if (!batch.productProfile) throw new Error(`Batch ${batchId} has no productProfile.`);
-          if (batch.batchReferenceVideos.length === 0) throw new Error(`Batch ${batchId} has no selected reference video.`);
+          if [ "${DESIRED_COUNT}" -le "${BEFORE_GENERATED}" ]; then
+            echo "desired_count must be greater than current scriptGeneratedCount." >&2
+            exit 1
+          fi
 
-          const beforeScriptGeneratedCount = batch.scriptGeneratedCount;
-          let desiredCount = beforeScriptGeneratedCount + 1;
+          TRIGGER_SOURCE="gh_release_business_effect_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}"
 
-          if (desiredInput !== "") {
-            const parsed = Number.parseInt(desiredInput, 10);
-            if (Number.isNaN(parsed) || parsed < 1 || parsed > 50) {
-              throw new Error("desired_count must be an integer between 1 and 50.");
-            }
-            desiredCount = parsed;
-          }
-
-          if (desiredCount <= beforeScriptGeneratedCount) {
-            throw new Error(`desired_count (${desiredCount}) must be greater than current scriptGeneratedCount (${beforeScriptGeneratedCount}).`);
-          }
-
-          const beforeScriptVariantCount = await prisma.scriptVariant.count({
-            where: { batchId }
-          });
-
-          const triggerSource = `gh_release_business_effect_${Date.now()}`;
-          const response = await app.request(`http://localhost/api/batches/${batchId}/script-generation-tasks`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              desiredCount,
+          PAYLOAD=$(jq -n \
+            --argjson desiredCount "${DESIRED_COUNT}" \
+            --arg triggerSource "${TRIGGER_SOURCE}" \
+            '{
+              desiredCount: $desiredCount,
               priority: 999,
               maxRetries: 3,
-              triggerSource,
+              triggerSource: $triggerSource,
               requestPayload: {
                 operator: "release_business_effect_check",
-                checkId: triggerSource
+                checkId: $triggerSource
               }
-            })
-          });
+            }')
 
-          const json = await response.json().catch(() => null);
-          if (response.status !== 202) {
-            throw new Error(`Failed to create task: ${json?.error?.message ?? `HTTP ${response.status}`}`);
-          }
+          HTTP_STATUS=$(curl -s -o /tmp/queue_task.json -w "%{http_code}" \
+            -X POST "http://127.0.0.1:3000/api/batches/${BATCH_ID}/script-generation-tasks" \
+            -H "Content-Type: application/json" \
+            -d "${PAYLOAD}")
 
-          const taskId = json?.data?.task?.id;
-          if (!taskId) throw new Error("Task id missing from response.");
+          cat /tmp/queue_task.json
 
-          console.log(JSON.stringify({
-            event: "business_effect_task_queued",
-            batchId,
-            taskId,
-            desiredCount,
-            beforeScriptGeneratedCount,
-            beforeScriptVariantCount
-          }));
+          if [ "${HTTP_STATUS}" != "202" ]; then
+            echo "Queue task failed with status ${HTTP_STATUS}" >&2
+            exit 1
+          fi
 
-          const outputFile = process.env.GITHUB_OUTPUT;
-          if (outputFile) {
-            fs.appendFileSync(outputFile, `task_id=${taskId}\n`);
-            fs.append
+          TASK_ID=$(jq -r '.data.task.id // empty' /tmp/queue_task.json)
+          if [ -z "${TASK_ID}" ]; then
+            echo "Task id missing from response." >&2
+            exit 1
+          fi
+
+          echo "task_id=${TASK_ID}" >> "${GITHUB_OUTPUT}"
+          echo "batch_id=${BATCH_ID}" >> "${GITHUB_OUTPUT}"
+          echo "before_generated=${BEFORE_GENERATED}" >> "${GITHUB_OUTPUT}"
+          echo "before_variants=${BEFORE_VARIANTS}" >> "${GITHUB_OUTPUT}"
+
+      - name: Run worker once
+        run: npm run worker:scripts:once -- --limit="${{ github.event.inputs.limit }}"
+
+      - name: Verify business effect
+        env:
+          TASK_ID: ${{ steps.queue.outputs.task_id }}
+          BATCH_ID: ${{ steps.queue.outputs.batch_id }}
+          BEFORE_GENERATED: ${{ steps.queue.outputs.before_generated }}
+          BEFORE_VARIANTS: ${{ steps.queue.outputs.before_variants }}
+        run: |
+          AFTER_JSON=$(curl -sf "http://127.0.0.1:3000/api/batches/${BATCH_ID}")
+          AFTER_GENERATED=$(echo "$AFTER_JSON" | jq -r '.data.scriptGeneratedCount')
+          AFTER_VARIANTS=$(echo "$AFTER_JSON" | jq -r '.data.scripts | length')
+
+          TASK_STATUS=$(echo "$AFTER_JSON" | jq -r --arg TASK_ID "${TASK_ID}" '[.data.tasks[] | select(.id == $TASK_ID)][0].status // "NOT_FOUND"')
+          TASK_ERROR_CODE=$(echo "$AFTER_JSON" | jq -r --arg TASK_ID "${TASK_ID}" '[.data.tasks[] | select(.id == $TASK_ID)][0].errorCode // ""')
+          TASK_ERROR_MESSAGE=$(echo "$AFTER_JSON" | jq -r --arg TASK_ID "${TASK_ID}" '[.data.tasks[] | select(.id == $TASK_ID)][0].errorMessage // ""')
+
+          if [ "${TASK_STATUS}" != "SUCCEEDED" ]; then
+            echo "Task not succeeded. status=${TASK_STATUS}, errorCode=${TASK_ERROR_CODE}, errorMessage=${TASK_ERROR_MESSAGE}" >&2
+            exit 1
+          fi
+
+          if [ "${AFTER_GENERATED}" -le "${BEFORE_GENERATED}" ]; then
+            echo "scriptGeneratedCount not increased. before=${BEFORE_GENERATED}, after=${AFTER_GENERATED}" >&2
+            exit 1
+          fi
+
+          if [ "${AFTER_VARIANTS}" -le "${BEFORE_VARIANTS}" ]; then
+            echo "scriptVariant count not increased. before=${BEFORE_VARIANTS}, after=${AFTER_VARIANTS}" >&2
+            exit 1
+          fi
+
+          jq -n \
+            --arg batchId "${BATCH_ID}" \
+            --arg taskStatus "${TASK_STATUS}" \
+            --argjson beforeGenerated "${BEFORE_GENERATED}" \
+            --argjson afterGenerated "${AFTER_GENERATED}" \
+            --argjson beforeVariants "${BEFORE_VARIANTS}" \
+            --argjson afterVariants "${AFTER_VARIANTS}" \
+            '{
+              event: "business_effect_check_passed",
+              batchId: $batchId,
+              taskStatus: $taskStatus,
+              beforeScriptGeneratedCount: $beforeGenerated,
+              afterScriptGeneratedCount: $afterGenerated,
+              beforeScriptVariantCount: $beforeVariants,
+              afterScriptVariantCount: $afterVariants
+            }'
+
+      - name: Stop API
+        if: always()
+        run: |
+          if [ -f /tmp/vvs_api.pid ]; then
+            kill "$(cat /tmp/vvs_api.pid)" >/dev/null 2>&1 || true
+          fi
