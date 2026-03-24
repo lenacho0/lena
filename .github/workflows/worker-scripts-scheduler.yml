@@ -7,24 +7,87 @@ on:
         description: Max queued tasks to consume in this run
         required: false
         default: "20"
+  schedule:
+    - cron: "*/2 * * * *"
+
+concurrency:
+  group: worker-scripts-once
+  cancel-in-progress: false
 
 jobs:
   run-worker-once:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     env:
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
       SCRIPT_GENERATION_API_KEY: ${{ secrets.SCRIPT_GENERATION_API_KEY }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       SCRIPT_GENERATION_PROVIDER: ${{ vars.SCRIPT_GENERATION_PROVIDER }}
       SCRIPT_GENERATION_MODEL: ${{ vars.SCRIPT_GENERATION_MODEL }}
       SCRIPT_GENERATION_BASE_URL: ${{ vars.SCRIPT_GENERATION_BASE_URL }}
+      SCRIPT_GENERATION_TIMEOUT_MS: ${{ vars.SCRIPT_GENERATION_TIMEOUT_MS }}
+      SCRIPT_GENERATION_LANGUAGE: ${{ vars.SCRIPT_GENERATION_LANGUAGE }}
 
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: npm ci
-      - run: npm run prisma:generate
-      - run: npm run prisma:migrate:deploy
-      - run: npm run worker:scripts:check-config
-      - run: npm run worker:scripts:once -- --limit="${{ github.event.inputs.limit }}"
+          cache: npm
+
+      - name: Locate app directory
+        run: |
+          if [ -f "package.json" ] && [ -f "package-lock.json" ]; then
+            echo "APP_DIR=." >> $GITHUB_ENV
+          elif [ -f "爆款视频分镜/package.json" ] && [ -f "爆款视频分镜/package-lock.json" ]; then
+            echo "APP_DIR=爆款视频分镜" >> $GITHUB_ENV
+          else
+            echo "ERROR: package.json/package-lock.json not found in root or 爆款视频分镜." >&2
+            ls -la
+            exit 1
+          fi
+
+      - name: Validate required runtime secrets
+        run: |
+          if [ -z "${DATABASE_URL}" ]; then
+            echo "DATABASE_URL secret is required for scheduler runs." >&2
+            exit 1
+          fi
+
+          if [ -z "${SCRIPT_GENERATION_API_KEY}" ] && [ -z "${OPENAI_API_KEY}" ] && [ -z "${GEMINI_API_KEY}" ]; then
+            echo "SCRIPT_GENERATION_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY secret is required." >&2
+            exit 1
+          fi
+
+      - name: Install dependencies
+        run: |
+          cd "$APP_DIR"
+          npm ci
+
+      - name: Generate Prisma client
+        run: |
+          cd "$APP_DIR"
+          npm run prisma:generate
+
+      - name: Apply migrations
+        run: |
+          cd "$APP_DIR"
+          npm run prisma:migrate:deploy
+
+      - name: Validate worker runtime config
+        run: |
+          cd "$APP_DIR"
+          npm run worker:scripts:check-config
+
+      - name: Run worker once
+        run: |
+          cd "$APP_DIR"
+          LIMIT_INPUT="${{ github.event.inputs.limit }}"
+          if [ -z "${LIMIT_INPUT}" ]; then
+            LIMIT_INPUT=20
+          fi
+          npm run worker:scripts:once -- --limit="${LIMIT_INPUT}"
