@@ -6,7 +6,7 @@ on:
       limit:
         description: Max queued tasks to consume in this run
         required: false
-        default: "20"
+        default: "5"
   schedule:
     - cron: "*/5 * * * *"
 
