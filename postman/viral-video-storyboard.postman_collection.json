@@ -1,0 +1,160 @@
+{
+  "info": {
+    "_postman_id": "3ee92ac9-49cb-4a03-bf33-186130b9dfb3",
+    "name": "Viral Video Storyboard API",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "Core API flows for batch update, reference video selection, script generation task creation, and polling."
+  },
+  "item": [
+    {
+      "name": "Health Check",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/health",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "health"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Get Batch Detail",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/batches/{{batchId}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "batches",
+            "{{batchId}}"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Patch Batch",
+      "request": {
+        "method": "PATCH",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"name\": \"宠物除臭喷雾创意测试批次-Postman\",\n  \"description\": \"Postman collection patch example\",\n  \"status\": \"scripts_ready\",\n  \"scriptTargetCount\": 12,\n  \"settings\": {\n    \"scriptCount\": 12,\n    \"concurrency\": {\n      \"scriptGeneration\": 4\n    }\n  },\n  \"productProfile\": {\n    \"productSummary\": \"Postman update example\",\n    \"sellingPoints\": [\n      \"快速中和宠物异味\",\n      \"温和不刺鼻\"\n    ],\n    \"notes\": \"updated from Postman\"\n  }\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/batches/{{batchId}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "batches",
+            "{{batchId}}"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Select Reference Video",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"referenceVideoId\": \"{{referenceVideoId}}\",\n  \"querySnapshot\": {\n    \"keyword\": \"pet deodorizer\",\n    \"filters\": {\n      \"playCountMin\": 500000,\n      \"publishedWithinDays\": 30\n    },\n    \"sortBy\": \"play_count_desc\"\n  },\n  \"notes\": \"selected from Postman\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/batches/{{batchId}}/reference-videos/select",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "batches",
+            "{{batchId}}",
+            "reference-videos",
+            "select"
+          ]
+        }
+      }
+    },
+    {
+      "name": "Create Script Generation Task (LLM MVP)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"desiredCount\": 10,\n  \"priority\": 120,\n  \"maxRetries\": 3,\n  \"triggerSource\": \"ui_postman\",\n  \"styleMix\": {\n    \"stable_conversion\": 0.4,\n    \"strong_hook\": 0.4,\n    \"atmosphere_seeding\": 0.2\n  },\n  \"requestPayload\": {\n    \"promptTemplateVersion\": \"v1\",\n    \"operator\": \"postman-debug\"\n  }\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/batches/{{batchId}}/script-generation-tasks",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "batches",
+            "{{batchId}}",
+            "script-generation-tasks"
+          ]
+        }
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3000",
+      "type": "string"
+    },
+    {
+      "key": "batchId",
+      "value": "00000000-0000-0000-0000-000000000001",
+      "type": "string"
+    },
+    {
+      "key": "referenceVideoId",
+      "value": "00000000-0000-0000-0000-000000000101",
+      "type": "string"
+    }
+  ]
+}

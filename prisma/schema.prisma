@@ -1,0 +1,429 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+/// Prisma 主要负责开发时的类型和关系表达。
+/// PostgreSQL 的 CHECK、GIN、部分索引等数据库细节，保留在 migration.sql 里。
+
+enum BatchStatus {
+  DRAFT                  @map("draft")
+  COLLECTING_REFERENCE   @map("collecting_reference")
+  ANALYZING              @map("analyzing")
+  GENERATING_SCRIPTS     @map("generating_scripts")
+  SCRIPTS_READY          @map("scripts_ready")
+  GENERATING_STORYBOARDS @map("generating_storyboards")
+  COMPLETED              @map("completed")
+  PARTIAL_SUCCESS        @map("partial_success")
+  FAILED                 @map("failed")
+  ARCHIVED               @map("archived")
+
+  @@map("batch_status")
+}
+
+enum SourcePlatform {
+  TIKTOK @map("tiktok")
+
+  @@map("source_platform")
+}
+
+enum TaskStatus {
+  DRAFT           @map("draft")
+  QUEUED          @map("queued")
+  RUNNING         @map("running")
+  SUCCEEDED       @map("succeeded")
+  FAILED          @map("failed")
+  PARTIAL_SUCCESS @map("partial_success")
+
+  @@map("task_status")
+}
+
+enum TaskType {
+  REFERENCE_VIDEO_SYNC        @map("reference_video_sync")
+  MEDIA_PREP                  @map("media_prep")
+  VIDEO_ANALYSIS              @map("video_analysis")
+  REFERENCE_SYNTHESIS         @map("reference_synthesis")
+  SCRIPT_GENERATION           @map("script_generation")
+  STORYBOARD_DECOMPOSITION    @map("storyboard_decomposition")
+  STORYBOARD_IMAGE_GENERATION @map("storyboard_image_generation")
+  COMPLIANCE_CHECK            @map("compliance_check")
+  EXPORT_PACKAGE              @map("export_package")
+
+  @@map("task_type")
+}
+
+enum AssetType {
+  VIDEO    @map("video")
+  IMAGE    @map("image")
+  DOCUMENT @map("document")
+  ARCHIVE  @map("archive")
+  JSON     @map("json")
+
+  @@map("asset_type")
+}
+
+enum AssetRole {
+  REFERENCE_VIDEO_COVER      @map("reference_video_cover")
+  REFERENCE_VIDEO_DOWNLOADED @map("reference_video_downloaded")
+  MEDIA_PREP_INPUT           @map("media_prep_input")
+  MEDIA_PREP_PROXY           @map("media_prep_proxy")
+  PRODUCT_WHITE_BG           @map("product_white_bg")
+  HUMAN_REFERENCE            @map("human_reference")
+  PET_REFERENCE              @map("pet_reference")
+  STORYBOARD_GRID            @map("storyboard_grid")
+  EXPORT_ZIP                 @map("export_zip")
+  SCRIPT_EXPORT_DOC          @map("script_export_doc")
+  STORYBOARD_JSON_EXPORT     @map("storyboard_json_export")
+
+  @@map("asset_role")
+}
+
+enum ScriptStyleBase {
+  STABLE_CONVERSION  @map("stable_conversion")
+  STRONG_HOOK        @map("strong_hook")
+  ATMOSPHERE_SEEDING @map("atmosphere_seeding")
+
+  @@map("script_style_base")
+}
+
+enum ComplianceTargetType {
+  BATCH              @map("batch")
+  SCRIPT_VARIANT     @map("script_variant")
+  STORYBOARD_VARIANT @map("storyboard_variant")
+
+  @@map("compliance_target_type")
+}
+
+enum RiskLevel {
+  LOW      @map("low")
+  MEDIUM   @map("medium")
+  HIGH     @map("high")
+  CRITICAL @map("critical")
+
+  @@map("risk_level")
+}
+
+model Batch {
+  id                       String                    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name                     String                    @db.VarChar(120)
+  description              String?
+  status                   BatchStatus               @default(DRAFT)
+  referenceVideoLimit      Int                       @default(1) @map("reference_video_limit") @db.SmallInt
+  scriptTargetCount        Int                       @default(10) @map("script_target_count") @db.SmallInt
+  progressPercent          Decimal                   @default(0) @map("progress_percent") @db.Decimal(5, 2)
+  scriptGeneratedCount     Int                       @default(0) @map("script_generated_count")
+  storyboardGeneratedCount Int                       @default(0) @map("storyboard_generated_count")
+  failedTaskCount          Int                       @default(0) @map("failed_task_count")
+  settings                 Json                      @default(dbgenerated("'{}'::jsonb")) @db.JsonB
+  lastError                String?                   @map("last_error")
+  createdAt                DateTime                  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt                DateTime                  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  deletedAt                DateTime?                 @map("deleted_at") @db.Timestamptz(6)
+  assets                   Asset[]
+  batchReferenceVideos     BatchReferenceVideo[]
+  complianceChecks         ComplianceCheck[]
+  exportPackages           ExportPackage[]
+  generationTasks          GenerationTask[]
+  productProfile           ProductProfile?
+  referenceSynthesisResult ReferenceSynthesisResult?
+  scriptVariants           ScriptVariant[]
+  storyboardVariants       StoryboardVariant[]
+
+  @@map("batches")
+}
+
+model ReferenceVideo {
+  id                   String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  platform             SourcePlatform        @default(TIKTOK)
+  sourceProvider       String                @default("fastmoss") @map("source_provider") @db.VarChar(32)
+  externalVideoId      String                @map("external_video_id") @db.VarChar(128)
+  authorExternalId     String?               @map("author_external_id") @db.VarChar(128)
+  authorName           String?               @map("author_name") @db.VarChar(255)
+  authorHandle         String?               @map("author_handle") @db.VarChar(255)
+  title                String?
+  description          String?
+  videoUrl             String?               @map("video_url")
+  coverUrl             String?               @map("cover_url")
+  durationSeconds      Decimal?              @map("duration_seconds") @db.Decimal(8, 2)
+  publishedAt          DateTime?             @map("published_at") @db.Timestamptz(6)
+  playCount            BigInt?               @map("play_count")
+  likeCount            BigInt?               @map("like_count")
+  commentCount         BigInt?               @map("comment_count")
+  shareCount           BigInt?               @map("share_count")
+  engagementRate       Decimal?              @map("engagement_rate") @db.Decimal(10, 4)
+  rawPayload           Json                  @default(dbgenerated("'{}'::jsonb")) @map("raw_payload") @db.JsonB
+  createdAt            DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt            DateTime              @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  assets               Asset[]
+  batchReferenceVideos BatchReferenceVideo[]
+  mediaPrepResults     MediaPrepResult[]
+  videoAnalysisResults VideoAnalysisResult[]
+
+  @@unique([platform, externalVideoId])
+  @@index([platform, publishedAt], map: "idx_reference_videos_published_at")
+  @@map("reference_videos")
+}
+
+model BatchReferenceVideo {
+  id                  String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  batchId             String               @map("batch_id") @db.Uuid
+  referenceVideoId    String               @map("reference_video_id") @db.Uuid
+  isSelected          Boolean              @default(false) @map("is_selected")
+  selectionRank       Int?                 @map("selection_rank")
+  selectedAt          DateTime?            @map("selected_at") @db.Timestamptz(6)
+  querySnapshot       Json                 @default(dbgenerated("'{}'::jsonb")) @map("query_snapshot") @db.JsonB
+  notes               String?
+  createdAt           DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt           DateTime             @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  assets              Asset[]
+  batch               Batch                @relation(fields: [batchId], references: [id])
+  mediaPrepResult     MediaPrepResult?
+  referenceVideo      ReferenceVideo       @relation(fields: [referenceVideoId], references: [id])
+  videoAnalysisResult VideoAnalysisResult?
+
+  @@unique([batchId, referenceVideoId])
+  @@index([batchId, isSelected, selectedAt], map: "idx_batch_reference_videos_selected")
+  @@map("batch_reference_videos")
+}
+
+model ProductProfile {
+  id                    String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  batchId               String          @unique @map("batch_id") @db.Uuid
+  brandName             String?         @map("brand_name") @db.VarChar(120)
+  productName           String          @map("product_name") @db.VarChar(200)
+  productCategory       String?         @map("product_category") @db.VarChar(120)
+  targetSpecies         String?         @map("target_species") @db.VarChar(64)
+  productSummary        String?         @map("product_summary")
+  sellingPoints         Json            @default(dbgenerated("'[]'::jsonb")) @map("selling_points") @db.JsonB
+  allowedClaims         Json            @default(dbgenerated("'[]'::jsonb")) @map("allowed_claims") @db.JsonB
+  forbiddenClaims       Json            @default(dbgenerated("'[]'::jsonb")) @map("forbidden_claims") @db.JsonB
+  requiredSellingPoints Json            @default(dbgenerated("'[]'::jsonb")) @map("required_selling_points") @db.JsonB
+  usageScenarios        Json            @default(dbgenerated("'[]'::jsonb")) @map("usage_scenarios") @db.JsonB
+  toneConstraints       Json            @default(dbgenerated("'{}'::jsonb")) @map("tone_constraints") @db.JsonB
+  notes                 String?
+  createdAt             DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt             DateTime        @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  assets                Asset[]
+  batch                 Batch           @relation(fields: [batchId], references: [id])
+  scriptVariants        ScriptVariant[]
+
+  @@map("product_profiles")
+}
+
+model ReferenceSynthesisResult {
+  id                  String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  batchId             String          @unique @map("batch_id") @db.Uuid
+  status              TaskStatus      @default(DRAFT)
+  sourceVideoCount    Int             @default(1) @map("source_video_count") @db.SmallInt
+  synthesisPayload    Json            @default(dbgenerated("'{}'::jsonb")) @map("synthesis_payload") @db.JsonB
+  traceabilityPayload Json            @default(dbgenerated("'{}'::jsonb")) @map("traceability_payload") @db.JsonB
+  createdAt           DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt           DateTime        @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  batch               Batch           @relation(fields: [batchId], references: [id])
+  scriptVariants      ScriptVariant[]
+
+  @@map("reference_synthesis_results")
+}
+
+model ScriptVariant {
+  id                         String                    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  batchId                    String                    @map("batch_id") @db.Uuid
+  productProfileId           String                    @map("product_profile_id") @db.Uuid
+  referenceSynthesisResultId String?                   @map("reference_synthesis_result_id") @db.Uuid
+  sequenceNo                 Int                       @map("sequence_no")
+  styleBase                  ScriptStyleBase           @map("style_base")
+  title                      String?                   @db.VarChar(255)
+  scriptText                 String                    @map("script_text")
+  scriptPayload              Json                      @default(dbgenerated("'{}'::jsonb")) @map("script_payload") @db.JsonB
+  generationTags             String[]                  @default([]) @map("generation_tags")
+  sourceTrace                Json                      @default(dbgenerated("'{}'::jsonb")) @map("source_trace") @db.JsonB
+  originType                 String                    @default("generated") @map("origin_type") @db.VarChar(32)
+  isSelected                 Boolean                   @default(false) @map("is_selected")
+  createdAt                  DateTime                  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt                  DateTime                  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  assets                     Asset[]
+  batch                      Batch                     @relation(fields: [batchId], references: [id])
+  productProfile             ProductProfile            @relation(fields: [productProfileId], references: [id])
+  referenceSynthesisResult   ReferenceSynthesisResult? @relation(fields: [referenceSynthesisResultId], references: [id])
+  storyboardVariants         StoryboardVariant[]
+
+  @@unique([batchId, sequenceNo])
+  @@index([batchId, isSelected, createdAt], map: "idx_script_variants_selected")
+  @@map("script_variants")
+}
+
+model StoryboardVariant {
+  id                   String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  batchId              String        @map("batch_id") @db.Uuid
+  scriptVariantId      String        @map("script_variant_id") @db.Uuid
+  variantNo            Int           @default(1) @map("variant_no") @db.SmallInt
+  status               TaskStatus    @default(DRAFT)
+  systemPayload        Json          @default(dbgenerated("'{}'::jsonb")) @map("system_payload") @db.JsonB
+  currentPayload       Json          @default(dbgenerated("'{}'::jsonb")) @map("current_payload") @db.JsonB
+  sourceScriptSnapshot Json          @default(dbgenerated("'{}'::jsonb")) @map("source_script_snapshot") @db.JsonB
+  isUserEdited         Boolean       @default(false) @map("is_user_edited")
+  editedAt             DateTime?     @map("edited_at") @db.Timestamptz(6)
+  defaultRestoredAt    DateTime?     @map("default_restored_at") @db.Timestamptz(6)
+  imageGenerationCount Int           @default(0) @map("image_generation_count") @db.SmallInt
+  createdAt            DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt            DateTime      @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  assets               Asset[]
+  batch                Batch         @relation(fields: [batchId], references: [id])
+  scriptVariant        ScriptVariant @relation(fields: [scriptVariantId], references: [id])
+
+  @@unique([scriptVariantId, variantNo])
+  @@index([scriptVariantId, createdAt], map: "idx_storyboard_variants_script")
+  @@map("storyboard_variants")
+}
+
+model GenerationTask {
+  id               String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  batchId          String            @map("batch_id") @db.Uuid
+  parentTaskId     String?           @map("parent_task_id") @db.Uuid
+  taskType         TaskType          @map("task_type")
+  status           TaskStatus        @default(DRAFT)
+  priority         Int               @default(100) @db.SmallInt
+  targetType       String?           @map("target_type") @db.VarChar(64)
+  targetId         String?           @map("target_id") @db.Uuid
+  requestPayload   Json              @default(dbgenerated("'{}'::jsonb")) @map("request_payload") @db.JsonB
+  resultPayload    Json              @default(dbgenerated("'{}'::jsonb")) @map("result_payload") @db.JsonB
+  errorCode        String?           @map("error_code") @db.VarChar(64)
+  errorMessage     String?           @map("error_message")
+  retryCount       Int               @default(0) @map("retry_count") @db.SmallInt
+  maxRetries       Int               @default(3) @map("max_retries") @db.SmallInt
+  queuedAt         DateTime?         @map("queued_at") @db.Timestamptz(6)
+  startedAt        DateTime?         @map("started_at") @db.Timestamptz(6)
+  finishedAt       DateTime?         @map("finished_at") @db.Timestamptz(6)
+  createdAt        DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime          @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  batch            Batch             @relation(fields: [batchId], references: [id])
+  childTasks       GenerationTask[]  @relation("GenerationTaskTree")
+  complianceChecks ComplianceCheck[] @relation("ComplianceCheckSourceTask")
+  exportPackages   ExportPackage[]   @relation("ExportPackageSourceTask")
+  parentTask       GenerationTask?   @relation("GenerationTaskTree", fields: [parentTaskId], references: [id])
+
+  @@index([status, taskType, priority, queuedAt], map: "idx_generation_tasks_queue")
+  @@index([targetType, targetId, createdAt], map: "idx_generation_tasks_target")
+  @@map("generation_tasks")
+}
+
+model MediaPrepResult {
+  id                    String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  batchReferenceVideoId String              @unique @map("batch_reference_video_id") @db.Uuid
+  referenceVideoId      String              @map("reference_video_id") @db.Uuid
+  status                TaskStatus          @default(DRAFT)
+  downloadStrategy      String              @default("primary") @map("download_strategy") @db.VarChar(32)
+  preparedSpec          Json                @default(dbgenerated("'{}'::jsonb")) @map("prepared_spec") @db.JsonB
+  diagnosticPayload     Json                @default(dbgenerated("'{}'::jsonb")) @map("diagnostic_payload") @db.JsonB
+  createdAt             DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt             DateTime            @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  batchReferenceVideo   BatchReferenceVideo @relation(fields: [batchReferenceVideoId], references: [id])
+  referenceVideo        ReferenceVideo      @relation(fields: [referenceVideoId], references: [id])
+
+  @@index([status, createdAt], map: "idx_media_prep_results_status")
+  @@map("media_prep_results")
+}
+
+model VideoAnalysisResult {
+  id                    String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  batchReferenceVideoId String              @unique @map("batch_reference_video_id") @db.Uuid
+  referenceVideoId      String              @map("reference_video_id") @db.Uuid
+  status                TaskStatus          @default(DRAFT)
+  analyzerVendor        String              @default("google") @map("analyzer_vendor") @db.VarChar(64)
+  analyzerModel         String              @default("gemini") @map("analyzer_model") @db.VarChar(128)
+  confidenceScore       Decimal?            @map("confidence_score") @db.Decimal(5, 2)
+  normalizedTags        String[]            @default([]) @map("normalized_tags")
+  summaryPayload        Json                @default(dbgenerated("'{}'::jsonb")) @map("summary_payload") @db.JsonB
+  analysisPayload       Json                @default(dbgenerated("'{}'::jsonb")) @map("analysis_payload") @db.JsonB
+  createdAt             DateTime            @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt             DateTime            @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  batchReferenceVideo   BatchReferenceVideo @relation(fields: [batchReferenceVideoId], references: [id])
+  referenceVideo        ReferenceVideo      @relation(fields: [referenceVideoId], references: [id])
+
+  @@map("video_analysis_results")
+}
+
+model ComplianceCheck {
+  id                String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  batchId           String               @map("batch_id") @db.Uuid
+  sourceTaskId      String?              @map("source_task_id") @db.Uuid
+  targetType        ComplianceTargetType @map("target_type")
+  targetId          String               @map("target_id") @db.Uuid
+  status            TaskStatus           @default(DRAFT)
+  checkerVendor     String               @default("internal") @map("checker_vendor") @db.VarChar(64)
+  checkerVersion    String?              @map("checker_version") @db.VarChar(64)
+  riskLevel         RiskLevel            @default(LOW) @map("risk_level")
+  issueCount        Int                  @default(0) @map("issue_count")
+  issues            Json                 @default(dbgenerated("'[]'::jsonb")) @db.JsonB
+  suggestionSummary String?              @map("suggestion_summary")
+  createdAt         DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime             @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  batch             Batch                @relation(fields: [batchId], references: [id])
+  sourceTask        GenerationTask?      @relation("ComplianceCheckSourceTask", fields: [sourceTaskId], references: [id])
+
+  @@index([targetType, targetId, createdAt], map: "idx_compliance_checks_target")
+  @@map("compliance_checks")
+}
+
+model ExportPackage {
+  id                      String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  batchId                 String          @map("batch_id") @db.Uuid
+  sourceTaskId            String?         @map("source_task_id") @db.Uuid
+  status                  TaskStatus      @default(DRAFT)
+  fileName                String?         @map("file_name") @db.VarChar(255)
+  exportScope             Json            @default(dbgenerated("'{}'::jsonb")) @map("export_scope") @db.JsonB
+  includedScriptCount     Int             @default(0) @map("included_script_count")
+  includedStoryboardCount Int             @default(0) @map("included_storyboard_count")
+  includedJsonCount       Int             @default(0) @map("included_json_count")
+  downloadExpiresAt       DateTime?       @map("download_expires_at") @db.Timestamptz(6)
+  completedAt             DateTime?       @map("completed_at") @db.Timestamptz(6)
+  createdAt               DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt               DateTime        @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  assets                  Asset[]
+  batch                   Batch           @relation(fields: [batchId], references: [id])
+  sourceTask              GenerationTask? @relation("ExportPackageSourceTask", fields: [sourceTaskId], references: [id])
+
+  @@map("export_packages")
+}
+
+model Asset {
+  id                    String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  batchId               String               @map("batch_id") @db.Uuid
+  referenceVideoId      String?              @map("reference_video_id") @db.Uuid
+  batchReferenceVideoId String?              @map("batch_reference_video_id") @db.Uuid
+  productProfileId      String?              @map("product_profile_id") @db.Uuid
+  scriptVariantId       String?              @map("script_variant_id") @db.Uuid
+  storyboardVariantId   String?              @map("storyboard_variant_id") @db.Uuid
+  exportPackageId       String?              @map("export_package_id") @db.Uuid
+  assetType             AssetType            @map("asset_type")
+  assetRole             AssetRole            @map("asset_role")
+  sourceProvider        String               @default("system") @map("source_provider") @db.VarChar(64)
+  storageProvider       String               @default("s3") @map("storage_provider") @db.VarChar(32)
+  bucketName            String?              @map("bucket_name") @db.VarChar(128)
+  storageKey            String?              @map("storage_key") @db.VarChar(512)
+  fileName              String?              @map("file_name") @db.VarChar(255)
+  mimeType              String?              @map("mime_type") @db.VarChar(128)
+  fileSizeBytes         BigInt?              @map("file_size_bytes")
+  checksumSha256        String?              @map("checksum_sha256") @db.VarChar(64)
+  width                 Int?
+  height                Int?
+  durationSeconds       Decimal?             @map("duration_seconds") @db.Decimal(8, 2)
+  externalUrl           String?              @map("external_url")
+  localPath             String?              @map("local_path")
+  meta                  Json                 @default(dbgenerated("'{}'::jsonb")) @db.JsonB
+  createdAt             DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt             DateTime             @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  batch                 Batch                @relation(fields: [batchId], references: [id])
+  batchReferenceVideo   BatchReferenceVideo? @relation(fields: [batchReferenceVideoId], references: [id])
+  exportPackage         ExportPackage?       @relation(fields: [exportPackageId], references: [id])
+  productProfile        ProductProfile?      @relation(fields: [productProfileId], references: [id])
+  referenceVideo        ReferenceVideo?      @relation(fields: [referenceVideoId], references: [id])
+  scriptVariant         ScriptVariant?       @relation(fields: [scriptVariantId], references: [id])
+  storyboardVariant     StoryboardVariant?   @relation(fields: [storyboardVariantId], references: [id])
+
+  @@index([batchId, assetRole, createdAt], map: "idx_assets_batch_role")
+  @@map("assets")
+}

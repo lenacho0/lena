@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>批次脚本生成 MVP</title>
+    <link rel="stylesheet" href="/mvp/styles.css" />
+  </head>
+  <body>
+    <main class="page">
+      <header class="topbar">
+        <div>
+          <h1>批次脚本生成 MVP</h1>
+          <p class="subtitle">批次列表、详情、触发脚本生成、任务轮询、脚本结果展示</p>
+        </div>
+        <button id="refreshBatchesBtn" type="button">刷新批次</button>
+      </header>
+
+      <p id="globalMessage" class="message" hidden></p>
+
+      <section class="layout">
+        <aside class="panel">
+          <div class="panel-title-row">
+            <h2>批次列表</h2>
+            <span id="batchListState" class="hint">加载中...</span>
+          </div>
+          <ul id="batchList" class="batch-list"></ul>
+        </aside>
+
+        <section class="panel panel-detail">
+          <div id="detailEmpty" class="empty">请选择左侧批次</div>
+
+          <div id="detailContent" hidden>
+            <div class="detail-header">
+              <h2 id="batchTitle"></h2>
+              <span id="batchStatus" class="status-badge"></span>
+            </div>
+            <p id="batchMeta" class="hint"></p>
+
+            <div class="meta-grid">
+              <div>
+                <span>脚本目标数</span>
+                <strong id="scriptTargetCount"></strong>
+              </div>
+              <div>
+                <span>已生成脚本</span>
+                <strong id="scriptGeneratedCount"></strong>
+              </div>
+              <div>
+                <span>失败任务数</span>
+                <strong id="failedTaskCount"></strong>
+              </div>
+              <div>
+                <span>进度</span>
+                <strong id="progressPercent"></strong>
+              </div>
+            </div>
+
+            <div class="summary-block">
+              <p id="productProfileSummary"></p>
+              <p id="selectedReferenceSummary"></p>
+            </div>
+
+            <div class="task-trigger">
+              <label for="desiredCountInput">desiredCount</label>
+              <input id="desiredCountInput" type="number" min="1" max="50" />
+              <button id="triggerTaskBtn" type="button">触发脚本生成</button>
+              <button id="stopPollingBtn" type="button" disabled>停止轮询</button>
+              <span id="pollingIndicator" class="hint">轮询：关闭</span>
+            </div>
+
+            <section class="section">
+              <h3>任务状态</h3>
+              <div id="taskState" class="empty-inline">暂无脚本生成任务</div>
+              <pre id="taskPayload" class="code-block" hidden></pre>
+            </section>
+
+            <section class="section">
+              <h3>任务历史</h3>
+              <div class="task-history-toolbar">
+                <label for="taskHistoryFilter">筛选</label>
+                <select id="taskHistoryFilter">
+                  <option value="all">全部</option>
+                  <option value="active">活跃</option>
+                  <option value="failed">失败</option>
+                  <option value="retrying">重试中</option>
+                </select>
+                <span id="taskHistoryCount" class="hint"></span>
+              </div>
+              <div id="taskHistory" class="task-history"></div>
+            </section>
+
+            <section class="section">
+              <h3>脚本结果</h3>
+              <div id="scriptsContainer" class="scripts"></div>
+            </section>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <script type="module" src="/mvp/app.js"></script>
+  </body>
+</html>

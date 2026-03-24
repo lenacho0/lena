@@ -1,0 +1,37 @@
+{
+  "name": "viral-video-storyboard",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --watch src/server.js",
+    "start": "node src/server.js",
+    "release:preflight": "bash scripts/release-preflight.sh",
+    "release:go-live-gate": "bash scripts/go-live-gate.sh",
+    "release:github-readiness": "bash scripts/github-release-readiness-check.sh",
+    "pretest:contract": "npm run prisma:generate && npm run prisma:seed",
+    "test:contract": "node --no-deprecation --test --test-concurrency=1 test/batches.integration.test.js test/script-generation-task-contract.integration.test.js",
+    "pretest:integration": "npm run prisma:generate && npm run prisma:seed",
+    "test:integration": "node --no-deprecation --test --test-concurrency=1 test/**/*.test.js",
+    "pretest:integration:fault-drill": "npm run prisma:generate && npm run prisma:seed",
+    "test:integration:fault-drill": "node --no-deprecation --test --test-concurrency=1 --test-name-pattern=\"worker requeues task on provider rate limit error|worker fails immediately for non-retryable provider invalid response\" test/script-generation-worker.integration.test.js",
+    "worker:scripts:once": "node src/workers/script-generation-worker.js --once",
+    "worker:scripts:check-config": "node src/workers/script-generation-worker.js --check-config",
+    "prisma:validate": "prisma validate",
+    "prisma:format": "prisma format",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate:dev": "prisma migrate dev",
+    "prisma:migrate:deploy": "prisma migrate deploy",
+    "prisma:seed": "prisma db seed"
+  },
+  "devDependencies": {
+    "dotenv": "^17.2.3",
+    "prisma": "^7.5.0"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.19.11",
+    "@prisma/adapter-pg": "^7.5.0",
+    "@prisma/client": "^7.5.0",
+    "hono": "^4.12.9",
+    "pg": "^8.16.3"
+  }
+}
