@@ -41,6 +41,24 @@ async function safeReadJson(response) {
   }
 }
 
+function shouldRetryWithoutStructuredOutput(response, data) {
+  if (!response || response.status !== 400) {
+    return false;
+  }
+
+  const summary = summarizeErrorBody(data).toLowerCase();
+  if (summary === "") {
+    return false;
+  }
+
+  return (
+    summary.includes("invalid argument") ||
+    summary.includes("response_format") ||
+    summary.includes("json_schema") ||
+    summary.includes("unsupported")
+  );
+}
+
 function extractContentText(data) {
   const content = data?.choices?.[0]?.message?.content;
 
@@ -100,28 +118,57 @@ export function createOpenAIScriptGenerationProvider({
       const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
       try {
-        const response = await fetchImpl(`${baseUrl.replace(/\/$/, "")}/chat/completions`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${apiKey}`,
-          },
-          body: JSON.stringify({
-            model,
-            response_format: {
-              type: "json_schema",
-              json_schema: {
-                name: SCRIPT_GENERATION_SCHEMA_NAME,
-                strict: true,
-                schema: scriptGenerationResponseSchema,
-              },
+        const endpoint = `${baseUrl.replace(/\/$/, "")}/chat/completions`;
+        const baseHeaders = {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${apiKey}`,
+        };
+        const requestPayload = {
+          model,
+          response_format: {
+            type: "json_schema",
+            json_schema: {
+              name: SCRIPT_GENERATION_SCHEMA_NAME,
+              strict: true,
+              schema: scriptGenerationResponseSchema,
             },
-            messages,
-          }),
+          },
+          messages,
+        };
+
+        let response = await fetchImpl(endpoint, {
+          method: "POST",
+          headers: baseHeaders,
+          body: JSON.stringify(requestPayload),
           signal: controller.signal,
         });
+        let data = await safeReadJson(response);
 
-        const data = await safeReadJson(response);
+        if (shouldRetryWithoutStructuredOutput(response, data)) {
+          const fallbackMessages = [
+            ...messages,
+            {
+              role: "user",
+              content: [
+                {
+                  type: "text",
+                  text: "请仅输出合法 JSON，对象结构必须包含 scripts 数组，不要输出 Markdown。",
+                },
+              ],
+            },
+          ];
+
+          response = await fetchImpl(endpoint, {
+            method: "POST",
+            headers: baseHeaders,
+            body: JSON.stringify({
+              model,
+              messages: fallbackMessages,
+            }),
+            signal: controller.signal,
+          });
+          data = await safeReadJson(response);
+        }
 
         if (!response.ok) {
           const reason = summarizeErrorBody(data);
