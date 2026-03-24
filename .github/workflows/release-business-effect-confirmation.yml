@@ -79,7 +79,18 @@ jobs:
           BATCH_ID: ${{ github.event.inputs.batch_id }}
           DESIRED_COUNT_INPUT: ${{ github.event.inputs.desired_count }}
         run: |
-          BEFORE_JSON=$(curl -sf "http://127.0.0.1:3000/api/batches/${BATCH_ID}")
+          HTTP_STATUS=$(curl -s -o /tmp/batch_detail.json -w "%{http_code}" \
+  "http://127.0.0.1:3000/api/batches/${BATCH_ID}")
+
+if [ "${HTTP_STATUS}" != "200" ]; then
+  echo "batch_id=${BATCH_ID} 查询失败，HTTP=${HTTP_STATUS}"
+  echo "当前可用批次列表如下："
+  curl -s "http://127.0.0.1:3000/api/batches?page=1&pageSize=20" | jq .
+  exit 1
+fi
+
+BEFORE_JSON=$(cat /tmp/batch_detail.json)
+
           BEFORE_GENERATED=$(echo "$BEFORE_JSON" | jq -r '.data.scriptGeneratedCount')
           BEFORE_VARIANTS=$(echo "$BEFORE_JSON" | jq -r '.data.scripts | length')
 
