@@ -143,7 +143,14 @@ jobs:
 
           AFTER_GENERATED=$(jq -r '.data.scriptGeneratedCount' /tmp/batch_after.json)
           AFTER_VARIANTS=$(jq -r '.data.scripts | length' /tmp/batch_after.json)
-          TASK_STATUS=$(jq -r --arg id "${TASK_ID}" '.data.tasks[] | select(.id == $id) | .status' /tmp/batch_after.json)
+
+          TASK_STATUS=$(jq -r --arg id "${TASK_ID}" '.data.tasks[] | select(.id == $id) | .status // "NOT_FOUND"' /tmp/batch_after.json)
+          TASK_ERROR_CODE=$(jq -r --arg id "${TASK_ID}" '.data.tasks[] | select(.id == $id) | .errorCode // ""' /tmp/batch_after.json)
+          TASK_ERROR_MESSAGE=$(jq -r --arg id "${TASK_ID}" '.data.tasks[] | select(.id == $id) | .errorMessage // ""' /tmp/batch_after.json)
+
+          echo "TASK_STATUS=${TASK_STATUS}"
+          echo "TASK_ERROR_CODE=${TASK_ERROR_CODE}"
+          echo "TASK_ERROR_MESSAGE=${TASK_ERROR_MESSAGE}"
 
           if [ "${TASK_STATUS}" != "SUCCEEDED" ]; then
             echo "Task status is ${TASK_STATUS}, expected SUCCEEDED." >&2
@@ -160,25 +167,8 @@ jobs:
             exit 1
           fi
 
-          jq -n \
-            --arg event "business_effect_check_passed" \
-            --arg batchId "${BATCH_ID}" \
-            --arg taskId "${TASK_ID}" \
-            --arg taskStatus "${TASK_STATUS}" \
-            --argjson beforeGenerated "${BEFORE_GENERATED}" \
-            --argjson afterGenerated "${AFTER_GENERATED}" \
-            --argjson beforeVariants "${BEFORE_VARIANTS}" \
-            --argjson afterVariants "${AFTER_VARIANTS}" \
-            '{
-              event: $event,
-              batchId: $batchId,
-              taskId: $taskId,
-              taskStatus: $taskStatus,
-              beforeScriptGeneratedCount: $beforeGenerated,
-              afterScriptGeneratedCount: $afterGenerated,
-              beforeScriptVariantCount: $beforeVariants,
-              afterScriptVariantCount: $afterVariants
-            }'
+          echo '{"event":"business_effect_check_passed"}'
+
 
       - name: Stop API
         if: always()
