@@ -1,0 +1,30 @@
+name: Worker Scripts Scheduler
+
+on:
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: Max queued tasks to consume in this run
+        required: false
+        default: "20"
+
+jobs:
+  run-worker-once:
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      SCRIPT_GENERATION_API_KEY: ${{ secrets.SCRIPT_GENERATION_API_KEY }}
+      SCRIPT_GENERATION_PROVIDER: ${{ vars.SCRIPT_GENERATION_PROVIDER }}
+      SCRIPT_GENERATION_MODEL: ${{ vars.SCRIPT_GENERATION_MODEL }}
+      SCRIPT_GENERATION_BASE_URL: ${{ vars.SCRIPT_GENERATION_BASE_URL }}
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: npm run prisma:generate
+      - run: npm run prisma:migrate:deploy
+      - run: npm run worker:scripts:check-config
+      - run: npm run worker:scripts:once -- --limit="${{ github.event.inputs.limit }}"
